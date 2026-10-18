@@ -24,11 +24,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # PHP from Ondřej Surý's PPA, the source setup-php itself installs from, so
 # setup-php finds the version already there and only switches to it.
+# setup-php reinstalls PHP from scratch unless php-config (from -dev) is
+# there, and on a self-hosted runner it apt-installs the build tools listed
+# first whenever one is missing.
 # Xdebug is installed but off: setup-php turns it on for `coverage: xdebug`.
 RUN add-apt-repository -y ppa:ondrej/php \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
+        apt-transport-https autoconf automake ca-certificates curl file g++ gcc gnupg jq make unzip \
         php${PHP_VERSION}-cli \
+        php${PHP_VERSION}-dev \
         php${PHP_VERSION}-bcmath \
         php${PHP_VERSION}-curl \
         php${PHP_VERSION}-gd \
@@ -77,4 +82,4 @@ RUN npx -y playwright@latest install --with-deps chromium \
 
 USER runner
 
-RUN php -v && composer --version && node --version && npm --version && /usr/lib/postgresql/18/bin/postgres --version
+RUN php -v && php-config --version && composer --version && node --version && npm --version && /usr/lib/postgresql/18/bin/postgres --version
