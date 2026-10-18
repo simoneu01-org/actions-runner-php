@@ -1,0 +1,89 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Daily, to follow a new runner release within a day.
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: build-${{ github.ref }}
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # GitHub stops sending jobs to a runner 30 days after a newer release,
+      # so the image follows every release. RUNNER_VERSION records the one
+      # last published.
+      - name: Find the latest runner release
+        id: runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api repos/actions/runner/releases/latest --jq '.tag_name | ltrimstr("v")')
+          echo "version=$latest" >> "$GITHUB_OUTPUT"
+          if [ "$latest" != "$(cat RUNNER_VERSION)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A daily run builds only for a new runner release, except on Mondays,
+      # when it rebuilds anyway to pick up PHP and Ubuntu security updates.
+      - name: Decide whether to build
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" != schedule ] || [ "${{ steps.runner.outputs.changed }}" = true ] || [ "$(date -u +%u)" = 1 ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v4
+        if: steps.decide.outputs.build == 'true'
+
+      - uses: docker/login-action@v4
+        if: steps.decide.outputs.build == 'true' && github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Built without a cache, so every build gets the latest PHP and Ubuntu
+      # packages, not a layer from last week.
+      - uses: docker/build-push-action@v7
+        if: steps.decide.outputs.build == 'true'
+        with:
+          context: .
+          platforms: linux/amd64
+          pull: true
+          no-cache: true
+          build-args: RUNNER_VERSION=${{ steps.runner.outputs.version }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ steps.runner.outputs.version }}
+
+      # The commit also counts as activity: GitHub turns off a public repo's
+      # scheduled workflows after 60 days without any.
+      - name: Record the runner version
+        if: steps.decide.outputs.build == 'true' && steps.runner.outputs.changed == 'true' && github.event_name != 'pull_request'
+        run: |
+          echo "${{ steps.runner.outputs.version }}" > RUNNER_VERSION
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -am "Runner ${{ steps.runner.outputs.version }}"
+          git push
