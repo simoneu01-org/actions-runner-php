@@ -2,7 +2,7 @@
 
 # GitHub's own runner image (Ubuntu 24.04, user "runner" with passwordless
 # sudo), with what a Laravel project's CI would otherwise install on every
-# job: PHP, Composer, Node and Playwright's Chromium.
+# job: PHP, Composer, Node, PostgreSQL and Playwright's Chromium.
 #
 # The build workflow passes the latest runner release; the default here is
 # only for a local build.
@@ -16,7 +16,7 @@ FROM ghcr.io/actions/actions-runner:${RUNNER_VERSION}
 ARG PHP_VERSION=8.5
 
 LABEL org.opencontainers.image.source="https://github.com/simoneu01-org/actions-runner-php"
-LABEL org.opencontainers.image.description="GitHub Actions runner with PHP, Composer, Node and Playwright's Chromium"
+LABEL org.opencontainers.image.description="GitHub Actions runner with PHP, Composer, Node, PostgreSQL and Playwright's Chromium"
 
 USER root
 
@@ -45,6 +45,20 @@ RUN add-apt-repository -y ppa:ondrej/php \
     && phpdismod -v ${PHP_VERSION} -s ALL xdebug \
     && rm -rf /var/lib/apt/lists/*
 
+# PostgreSQL from the PostgreSQL project's own apt repository, for a runner
+# with no Docker to start a `services:` container. Installed stopped, with the
+# password "postgres"; a job starts it with `sudo pg_ctlcluster 18 main start`.
+ARG POSTGRES_VERSION=18
+RUN install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-${POSTGRES_VERSION} \
+    && pg_ctlcluster ${POSTGRES_VERSION} main start \
+    && su postgres -c "psql -c \"ALTER USER postgres PASSWORD 'postgres'\"" \
+    && pg_ctlcluster ${POSTGRES_VERSION} main stop \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
@@ -63,4 +77,4 @@ RUN npx -y playwright@latest install --with-deps chromium \
 
 USER runner
 
-RUN php -v && composer --version && node --version && npm --version
+RUN php -v && composer --version && node --version && npm --version && /usr/lib/postgresql/18/bin/postgres --version
